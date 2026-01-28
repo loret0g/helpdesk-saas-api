@@ -3,6 +3,7 @@ const cors = require("cors");
 const morgan = require("morgan");
 
 const authRoutes = require("./routes/auth.routes");
+const ticketRoutes = require("./routes/tickets.routes");
 
 const app = express();
 
@@ -13,6 +14,6 @@ app.use(morgan("dev"));       // Logs de peticiones en consola
 
 // ===== Rutas =====
 app.use("/api/auth", authRoutes);
-
+app.use("/api/tickets", ticketRoutes);
 
 module.exports = app;
