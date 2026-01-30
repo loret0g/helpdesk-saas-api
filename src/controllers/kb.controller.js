@@ -8,6 +8,33 @@ function isStaff(user) {
   return user.role === "AGENT" || user.role === "ADMIN";
 }
 
+// GET - /api/kb/id/:id
+async function getKbById(req, res) {
+  try {
+    const user = req.user;
+    const { id } = req.params;
+
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ message: "Invalid article id" });
+    }
+
+    const article = await KbArticle.findById(id)
+      .populate("categoryId", "name slug")
+      .populate("authorId", "name email");
+
+    if (!article) return res.status(404).json({ message: "Article not found" });
+
+    if (!isStaff(user) && article.status !== "PUBLISHED") {
+      return res.status(403).json({ message: "You are not allowed to view this article" });
+    }
+
+    return res.json(article);
+  } catch (err) {
+    console.error("❌ getKbById error:", err);
+    return res.status(500).json({ message: "Server error" });
+  }
+}
+
 // GET - /api/kb?status=&categorySlug=&q=
 async function listKb(req, res) {
   try {
@@ -191,4 +218,4 @@ async function archiveKb(req, res) {
   }
 }
 
-module.exports = { listKb, getKbBySlug, createKb, updateKb, archiveKb };
+module.exports = { getKbById, listKb, getKbBySlug, createKb, updateKb, archiveKb };
