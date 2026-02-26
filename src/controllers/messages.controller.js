@@ -84,7 +84,7 @@ async function createMessage(req, res) {
     const now = new Date();
     const update = { lastMessageAt: now };
 
-    const isAgent = user.role === "AGENT" || user.role === "ADMIN";
+    const isAgent = user.role === "AGENT";
     const isCustomer = user.role === "CUSTOMER";
 
     if (isAgent) {
@@ -95,7 +95,7 @@ async function createMessage(req, res) {
 
       // Cambiar status cuando responde un agente (si está cerrado, no lo reabrimos por respuesta del agente)
       if (ticket.status !== "CLOSED") {
-        update.status = "WAITING_CUSTOMER";
+        update.status = "WAITING_ON_CUSTOMER";
       }
     }
 
@@ -104,7 +104,7 @@ async function createMessage(req, res) {
       if (ticket.status === "CLOSED" || ticket.status === "RESOLVED") {
         update.status = ticket.assigneeId ? "IN_PROGRESS" : "OPEN";
       } else {
-        // Si no estaba cerrado, lo dejamos como IN_PROGRESS si hay agente, o OPEN si no
+        // Si no estaba cerrado, lo dejamos como IN_PROGRESS si hay agente, OPEN si no
         update.status = ticket.assigneeId ? "IN_PROGRESS" : "OPEN";
       }
     }

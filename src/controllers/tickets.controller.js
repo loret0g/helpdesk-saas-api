@@ -1,6 +1,9 @@
 const Ticket = require('../models/Ticket');
 const Category = require('../models/Category');
+const User = require("../models/User");
 const TicketsCounter = require('../models/TicketsCounter');
+
+const ALLOWED_STATUS = Ticket.TICKET_STATUS;
 
 const mongoose = require('mongoose');
 
@@ -54,7 +57,7 @@ async function createTicket(req, res) {
     return res.status(201).json(ticket);
 
   } catch (error) {
-    console.error("❌ createTicket error:", err);
+    console.error("❌ createTicket error:", error);
     return res.status(500).json({ message: "Server error" });
   }
 }
@@ -86,7 +89,7 @@ async function listTickets(req, res) {
         filter.status = status;
       } else {
         // por defecto, no mostrar CLOSED
-        filter.status = { $ne: "CLOSED" };
+        // filter.status = { $ne: "CLOSED" };
       }
 
       // búsqueda simple
@@ -126,9 +129,9 @@ async function getTicketById(req, res) {
     }
 
     const ticket = await Ticket.findById(id)
-    .populate("categoryId", "name slug")
-    .populate("requesterId", "name email role")
-    .populate("assigneeId", "name email role");
+      .populate("categoryId", "name slug")
+      .populate("requesterId", "name email role")
+      .populate("assigneeId", "name email role");
 
     if (!ticket) {
       return res.status(404).json({ message: "Ticket not found" });
@@ -150,17 +153,14 @@ async function getTicketById(req, res) {
   }
 }
 
-//* Asignación y cambio de estado de tickets (AGENT / ADMIN)
-const ALLOWED_STATUS = ["OPEN", "IN_PROGRESS", "WAITING_CUSTOMER", "RESOLVED", "CLOSED"];
-
 // PATCH /api/tickets/:id/assign
 async function assignTicketToMe(req, res) {
   try {
     const { id } = req.params;
     const user = req.user;
 
-    if (user.role !== "AGENT" && user.role !== "ADMIN") {
-      return res.status(403).json({ message: "Only agents/admins can assign tickets" });
+    if (user.role !== "AGENT") {
+      return res.status(403).json({ message: "Only agents can assign tickets to themselves" });
     }
 
     if (!mongoose.isValidObjectId(id)) {
@@ -201,7 +201,9 @@ async function updateTicketStatus(req, res) {
     const { status } = req.body;
 
     if (user.role !== "AGENT" && user.role !== "ADMIN") {
-      return res.status(403).json({ message: "Only agents/admins can change ticket status" });
+      return res
+        .status(403)
+        .json({ message: "Only agents/admins can change ticket status" });
     }
 
     if (!mongoose.isValidObjectId(id)) {
@@ -220,12 +222,19 @@ async function updateTicketStatus(req, res) {
       return res.status(404).json({ message: "Ticket not found" });
     }
 
-    // Si se pone IN_PROGRESS y no está asignado, se auto-asigna
-    if (status === "IN_PROGRESS" && !ticket.assigneeId) {
+    // Si se pone IN_PROGRESS y no está asignado, se auto-asigna SOLO si es AGENT
+    if (status === "IN_PROGRESS" && !ticket.assigneeId && user.role === "AGENT") {
       ticket.assigneeId = user._id;
     }
 
     ticket.status = status;
+
+    if (status === "RESOLVED") ticket.resolvedAt = new Date();
+    else ticket.resolvedAt = null;
+
+    if (status === "CLOSED") ticket.closedAt = new Date();
+    else ticket.closedAt = null;
+
     await ticket.save();
 
     const populated = await Ticket.findById(ticket._id)
@@ -236,10 +245,71 @@ async function updateTicketStatus(req, res) {
     return res.json(populated);
   } catch (err) {
     console.error("❌ updateTicketStatus error:", err);
+
+    // Si es ValidationError (enum etc), mejor 400 que 500
+    if (err?.name === "ValidationError") {
+      return res.status(400).json({ message: err.message });
+    }
+
     return res.status(500).json({ message: "Server error" });
   }
 }
 
+// PATCH /api/tickets/:id/assignee
+// ADMIN asigna ticket a un AGENT (o lo deja unassigned con null)
+async function setTicketAssignee(req, res) {
+  try {
+    const { id } = req.params;
+    const user = req.user;
+    const { assigneeId } = req.body; // string o null
+
+    if (user.role !== "ADMIN") {
+      return res.status(403).json({ message: "Only admins can reassign tickets" });
+    }
+
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ message: "Invalid ticket id" });
+    }
+
+    // Normalizamos: "", undefined -> null (unassigned)
+    const normalizedAssigneeId =
+      assigneeId && String(assigneeId).trim() ? String(assigneeId).trim() : null;
+
+    // Si viene assigneeId, validar que existe y es AGENT
+    if (normalizedAssigneeId) {
+      if (!mongoose.isValidObjectId(normalizedAssigneeId)) {
+        return res.status(400).json({ message: "Invalid assignee id" });
+      }
+
+      const assigneeUser = await User.findById(normalizedAssigneeId).select("role name email");
+      if (!assigneeUser) {
+        return res.status(404).json({ message: "Assignee user not found" });
+      }
+
+      if (assigneeUser.role !== "AGENT") {
+        return res.status(400).json({ message: "Assignee must be an AGENT" });
+      }
+    }
+
+    const ticket = await Ticket.findById(id);
+    if (!ticket) {
+      return res.status(404).json({ message: "Ticket not found" });
+    }
+
+    ticket.assigneeId = normalizedAssigneeId; // null o ObjectId string
+    await ticket.save();
+
+    const populated = await Ticket.findById(ticket._id)
+      .populate("categoryId", "name slug")
+      .populate("requesterId", "name email role")
+      .populate("assigneeId", "name email role");
+
+    return res.json(populated);
+  } catch (err) {
+    console.error("❌ setTicketAssignee error:", err);
+    return res.status(500).json({ message: "Server error" });
+  }
+}
 
 module.exports = {
   createTicket,
@@ -247,4 +317,5 @@ module.exports = {
   getTicketById,
   assignTicketToMe,
   updateTicketStatus,
+  setTicketAssignee,
 };
