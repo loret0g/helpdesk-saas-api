@@ -49,13 +49,13 @@ La API gestiona:
 ### Estados del ticket
 - `OPEN`
 - `IN_PROGRESS`
-- `WAITING_CUSTOMER`
+- `WAITING_ON_CUSTOMER`
 - `RESOLVED`
 - `CLOSED`
 
 ### Flujo automático de estado
 - Cuando responde un **AGENT**:
-  - El ticket pasa a `WAITING_CUSTOMER`
+  - El ticket pasa a `WAITING_ON_CUSTOMER`
   - Si estaba sin asignar, se auto-asigna al agente
 - Cuando responde un **CUSTOMER**:
   - Si estaba `RESOLVED` o `CLOSED`, el ticket se reabre
