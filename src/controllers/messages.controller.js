@@ -5,12 +5,28 @@ const TicketMessage = require('../models/TicketMessage');
 async function assertCanAccessTicket(user, ticket) {
   if (!ticket) return false;
 
+  // CUSTOMER → solo sus tickets
   if (user.role === "CUSTOMER") {
     return ticket.requesterId.toString() === user._id.toString();
   }
 
-  //* AGENT / ADMIN: permito por ahora. MVP
-  return true;
+  // ADMIN → acceso total
+  if (user.role === "ADMIN") {
+    return true;
+  }
+
+  // AGENT → solo los suyos o los no asignados
+  if (user.role === "AGENT") {
+    const isAssignedToMe =
+      ticket.assigneeId &&
+      ticket.assigneeId.toString() === user._id.toString();
+
+    const isUnassigned = !ticket.assigneeId;
+
+    return isAssignedToMe || isUnassigned;
+  }
+
+  return false;
 }
 
 // GET - api/tickets/:id/messages

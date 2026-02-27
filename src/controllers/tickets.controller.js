@@ -71,46 +71,62 @@ async function listTickets(req, res) {
 
     const filter = {};
 
-    // CUSTOMER: solo sus tickets (sin filtros de assigned)
     if (user.role === "CUSTOMER") {
       filter.requesterId = user._id;
-    } else {
-      // AGENT / ADMIN
 
-      // assigned filter
-      if (assigned === "me") {
-        filter.assigneeId = user._id;
-      } else if (assigned === "unassigned") {
+    } else if (user.role === "ADMIN") {
+      if (assigned === "unassigned") {
         filter.assigneeId = null;
       }
 
-      // status filter
-      if (status) {
-        filter.status = status;
+    } else if (user.role === "AGENT") {
+      // El agente, por defecto, ve su "Inbox":
+      // tickets asignados a él + tickets sin asignar.
+      if (assigned === "me") {
+        filter.assigneeId = user._id;
+
+      } else if (assigned === "unassigned") {
+        filter.assigneeId = null;
+
       } else {
-        // por defecto, no mostrar CLOSED
-        // filter.status = { $ne: "CLOSED" };
-      }
-
-      // búsqueda simple
-      if (q && q.trim()) {
-        const text = q.trim();
-
-        // si parece un code, regex
+        // Vista por defecto (inbox)
         filter.$or = [
-          { code: { $regex: text, $options: "i" } },
-          { subject: { $regex: text, $options: "i" } },
+          { assigneeId: user._id },
+          { assigneeId: null }
         ];
       }
+
+    } else {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
+    // --- Filtro por estado ---
+    if (status && String(status).trim()) {
+      filter.status = String(status).trim();
+    }
+
+    // --- Búsqueda por código o asunto ---
+    if (q && String(q).trim()) {
+      const text = String(q).trim();
+
+      // Se usa $and para no interferir con el $or del inbox del agente
+      filter.$and = filter.$and || [];
+      filter.$and.push({
+        $or: [
+          { code: { $regex: text, $options: "i" } },
+          { subject: { $regex: text, $options: "i" } },
+        ],
+      });
     }
 
     const tickets = await Ticket.find(filter)
       .populate("categoryId", "name slug")
-      .populate("requesterId", "name email")
-      .populate("assigneeId", "name email")
+      .populate("requesterId", "name email role")
+      .populate("assigneeId", "name email role")
       .sort({ lastMessageAt: -1 });
 
     return res.json(tickets);
+
   } catch (err) {
     console.error("❌ listTickets error:", err);
     return res.status(500).json({ message: "Server error" });
@@ -123,7 +139,6 @@ async function getTicketById(req, res) {
     const { id } = req.params;
     const user = req.user;
 
-    // Validar ObjetId
     if (!mongoose.isValidObjectId(id)) {
       return res.status(400).json({ message: "Invalid ticket ID" });
     }
@@ -137,16 +152,32 @@ async function getTicketById(req, res) {
       return res.status(404).json({ message: "Ticket not found" });
     }
 
-    // Permisos: customer solo ve sus tickets
+    // CUSTOMER: solo sus tickets
     if (user.role === "CUSTOMER") {
-      const isOwner = ticket.requesterId?._id.toString() === user._id.toString();
+      const isOwner =
+        ticket.requesterId?._id.toString() === user._id.toString();
+
       if (!isOwner) {
         return res.status(403).json({ message: "Access denied" });
       }
     }
 
-    return res.json(ticket);
+    // AGENT: solo los suyos o unassigned
+    if (user.role === "AGENT") {
+      const isAssignedToMe =
+        ticket.assigneeId &&
+        ticket.assigneeId.toString() === user._id.toString();
 
+      const isUnassigned = !ticket.assigneeId;
+
+      if (!isAssignedToMe && !isUnassigned) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+    }
+
+    // ADMIN: acceso total
+
+    return res.json(ticket);
   } catch (error) {
     console.error("❌ getTicketById error:", error);
     return res.status(500).json({ message: "Server error" });
