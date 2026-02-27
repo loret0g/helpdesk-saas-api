@@ -143,39 +143,41 @@ async function getTicketById(req, res) {
       return res.status(400).json({ message: "Invalid ticket ID" });
     }
 
-    const ticket = await Ticket.findById(id)
-      .populate("categoryId", "name slug")
-      .populate("requesterId", "name email role")
-      .populate("assigneeId", "name email role");
+    // Buscar SIN populate para validar permisos con ObjectIds puros
+    const ticketRaw = await Ticket.findById(id).select(
+      "categoryId requesterId assigneeId status priority subject description code lastMessageAt resolvedAt closedAt createdAt updatedAt"
+    );
 
-    if (!ticket) {
+    if (!ticketRaw) {
       return res.status(404).json({ message: "Ticket not found" });
     }
 
-    // CUSTOMER: solo sus tickets
+    // Autorización por rol
     if (user.role === "CUSTOMER") {
-      const isOwner =
-        ticket.requesterId?._id.toString() === user._id.toString();
-
+      const isOwner = String(ticketRaw.requesterId) === String(user._id);
       if (!isOwner) {
         return res.status(403).json({ message: "Access denied" });
       }
     }
 
-    // AGENT: solo los suyos o unassigned
     if (user.role === "AGENT") {
       const isAssignedToMe =
-        ticket.assigneeId &&
-        ticket.assigneeId.toString() === user._id.toString();
+        ticketRaw.assigneeId && String(ticketRaw.assigneeId) === String(user._id);
 
-      const isUnassigned = !ticket.assigneeId;
+      const isUnassigned = !ticketRaw.assigneeId;
 
       if (!isAssignedToMe && !isUnassigned) {
         return res.status(403).json({ message: "Access denied" });
       }
     }
 
-    // ADMIN: acceso total
+    // ADMIN: acceso total (no hace falta condición)
+
+    // Si pasa permisos, devolver con populate
+    const ticket = await Ticket.findById(id)
+      .populate("categoryId", "name slug")
+      .populate("requesterId", "name email role")
+      .populate("assigneeId", "name email role");
 
     return res.json(ticket);
   } catch (error) {
