@@ -1,38 +1,12 @@
-const mongoose = require('mongoose');
-const Ticket = require('../models/Ticket');
-const TicketMessage = require('../models/TicketMessage');
+const mongoose = require("mongoose");
+const Ticket = require("../models/Ticket");
+const TicketMessage = require("../models/TicketMessage");
+const { canAccessTicket } = require("../utils/ticketAccess");
 
-async function assertCanAccessTicket(user, ticket) {
-  if (!ticket) return false;
-
-  // CUSTOMER → solo sus tickets
-  if (user.role === "CUSTOMER") {
-    return ticket.requesterId.toString() === user._id.toString();
-  }
-
-  // ADMIN → acceso total
-  if (user.role === "ADMIN") {
-    return true;
-  }
-
-  // AGENT → solo los suyos o los no asignados
-  if (user.role === "AGENT") {
-    const isAssignedToMe =
-      ticket.assigneeId &&
-      ticket.assigneeId.toString() === user._id.toString();
-
-    const isUnassigned = !ticket.assigneeId;
-
-    return isAssignedToMe || isUnassigned;
-  }
-
-  return false;
-}
-
-// GET - api/tickets/:id/messages
+// GET - /api/tickets/:id/messages
 async function listMessages(req, res) {
   try {
-    const { id } = req.params; // ticket id
+    const { id } = req.params;
     const user = req.user;
 
     if (!mongoose.isValidObjectId(id)) {
@@ -44,8 +18,7 @@ async function listMessages(req, res) {
       return res.status(404).json({ message: "Ticket not found" });
     }
 
-    const allowed = await assertCanAccessTicket(user, ticket);
-    if (!allowed) {
+    if (!canAccessTicket(user, ticket)) {
       return res.status(403).json({ message: "You are not allowed to view these messages" });
     }
 
@@ -58,15 +31,12 @@ async function listMessages(req, res) {
     console.error("❌ listMessages error:", err);
     return res.status(500).json({ message: "Server error" });
   }
-
-
-
 }
 
-// POST /api/tickets/:id/messages
+// POST - /api/tickets/:id/messages
 async function createMessage(req, res) {
   try {
-    const { id } = req.params; // ticket id
+    const { id } = req.params;
     const user = req.user;
     const { body } = req.body;
 
@@ -83,12 +53,10 @@ async function createMessage(req, res) {
       return res.status(404).json({ message: "Ticket not found" });
     }
 
-    const allowed = await assertCanAccessTicket(user, ticket);
-    if (!allowed) {
+    if (!canAccessTicket(user, ticket)) {
       return res.status(403).json({ message: "You are not allowed to post in this ticket" });
     }
 
-    // 1) Crear mensaje
     const msg = await TicketMessage.create({
       ticketId: ticket._id,
       authorId: user._id,
@@ -96,7 +64,6 @@ async function createMessage(req, res) {
       isInternal: false,
     });
 
-    // 2) Flujo automático de status + lastMessageAt
     const now = new Date();
     const update = { lastMessageAt: now };
 
@@ -109,18 +76,16 @@ async function createMessage(req, res) {
         update.assigneeId = user._id;
       }
 
-      // Cambiar status cuando responde un agente (si está cerrado, no lo reabrimos por respuesta del agente)
+      // Si el ticket no está cerrado, pasa a WAITING_ON_CUSTOMER
       if (ticket.status !== "CLOSED") {
         update.status = "WAITING_ON_CUSTOMER";
       }
     }
 
     if (isCustomer) {
-      // Si estaba cerrado/resuelto y el customer escribe, reabrimos
       if (ticket.status === "CLOSED" || ticket.status === "RESOLVED") {
         update.status = ticket.assigneeId ? "IN_PROGRESS" : "OPEN";
       } else {
-        // Si no estaba cerrado, lo dejamos como IN_PROGRESS si hay agente, OPEN si no
         update.status = ticket.assigneeId ? "IN_PROGRESS" : "OPEN";
       }
     }
@@ -131,8 +96,8 @@ async function createMessage(req, res) {
       { new: true }
     )
       .populate("categoryId", "name slug")
-      .populate("requesterId", "name email")
-      .populate("assigneeId", "name email");
+      .populate("requesterId", "name email role")
+      .populate("assigneeId", "name email role");
 
     const populatedMsg = await TicketMessage.findById(msg._id).populate(
       "authorId",
@@ -148,7 +113,6 @@ async function createMessage(req, res) {
     return res.status(500).json({ message: "Server error" });
   }
 }
-
 
 module.exports = {
   listMessages,
