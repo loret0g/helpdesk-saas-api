@@ -65,7 +65,10 @@ async function listTickets(req, res) {
   try {
     const user = req.user;
 
+    // Construye el filtro base aplicando las reglas de acceso por rol
     const filter = buildTicketsListFilter(user, req.query);
+
+    // Rol no permitido / user inválido
     if (!filter) {
       return res.status(403).json({ message: "Access denied" });
     }

@@ -44,35 +44,45 @@ function canAccessTicket(user, ticket) {
  * - AGENT: por defecto inbox (míos + unassigned)
  */
 function buildTicketsListFilter(user, query) {
-  const { assigned, status, q } = query || {};
+  const { assigned, status, q, priority } = query || {};
   const filter = {};
 
   if (!user) return null;
 
   if (user.role === "CUSTOMER") {
     filter.requesterId = user._id;
+
   } else if (user.role === "ADMIN") {
     if (assigned === "unassigned") filter.assigneeId = null;
-    // assigned=me se ignora a propósito (admin no se asigna)
+
   } else if (user.role === "AGENT") {
-    if (assigned === "me") {
-      filter.assigneeId = user._id;
-    } else if (assigned === "unassigned") {
-      filter.assigneeId = null;
-    } else {
-      // vista por defecto: inbox
-      filter.$or = [{ assigneeId: user._id }, { assigneeId: null }];
-    }
+    if (assigned === "me") filter.assigneeId = user._id;
+    else if (assigned === "unassigned") filter.assigneeId = null;
+    else filter.$or = [{ assigneeId: user._id }, { assigneeId: null }];
+
   } else {
     return null;
   }
 
-  // Filtro por estado (si llega)
+  // Estado
   if (status && String(status).trim()) {
-    filter.status = String(status).trim();
+    const st = String(status).trim();
+    if (st === "ALL") {
+      // sin filtro
+    } else if (st === "ALL_EXCEPT_CLOSED") {
+      filter.status = { $ne: "CLOSED" };
+    } else {
+      filter.status = st;
+    }
   }
 
-  // Búsqueda por código/asunto (sin romper el $or del inbox)
+  // Prioridad
+  if (priority && String(priority).trim()) {
+    const pr = String(priority).trim();
+    if (pr !== "ALL") filter.priority = pr;
+  }
+
+  // Búsqueda (compatible con $or del inbox)
   if (q && String(q).trim()) {
     const text = String(q).trim();
     filter.$and = filter.$and || [];
