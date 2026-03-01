@@ -253,10 +253,6 @@ async function runSeed() {
         authorId: customer._id,
         body: "Hi, I can't log in from my phone.",
       },
-      {
-        authorId: agentA._id,
-        body: "Thanks. What exact error message are you seeing?",
-      },
     ],
   });
 
