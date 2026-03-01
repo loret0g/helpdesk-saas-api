@@ -56,6 +56,11 @@ async function createTicket(req, res) {
     return res.status(201).json(ticket);
   } catch (error) {
     console.error("❌ createTicket error:", error);
+
+    if (error?.name === "ValidationError") {
+      return res.status(400).json({ message: error.message });
+    }
+
     return res.status(500).json({ message: "Server error" });
   }
 }
