@@ -82,6 +82,11 @@ const ticketSchema = new mongoose.Schema(
       default: null,
       index: true,
     },
+    seedTag: {
+      type: String,
+      default: null,
+      index: true,
+    },
   },
   { timestamps: true }
 );

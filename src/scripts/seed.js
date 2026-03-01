@@ -15,41 +15,74 @@ async function connect() {
   await mongoose.connect(uri);
 }
 
+function normalizeEmail(email) {
+  return String(email || "").toLowerCase().trim();
+}
+
+function normalizeSlug(slug) {
+  return String(slug || "").toLowerCase().trim();
+}
+
 async function upsertUser({ name, email, password, role }) {
-  const normalizedEmail = email.toLowerCase().trim();
+  const normalizedEmail = normalizeEmail(email);
+  const existing = await User.findOne({ email: normalizedEmail });
+
+  // Si ya existe, no pisamos passwordHash
+  if (existing) {
+    existing.name = name;
+    existing.role = role;
+    existing.isActive = true;
+    await existing.save();
+    return existing;
+  }
+
   const passwordHash = await bcrypt.hash(password, 10);
 
-  const user = await User.findOneAndUpdate(
-    { email: normalizedEmail },
-    { $set: { name, email: normalizedEmail, role, isActive: true }, $setOnInsert: { passwordHash } },
-    { new: true, upsert: true }
-  );
-
-  return user;
+  return User.create({
+    name,
+    email: normalizedEmail,
+    role,
+    isActive: true,
+    passwordHash,
+  });
 }
 
 async function upsertCategory({ name, slug }) {
-  const normalizedSlug = slug.toLowerCase().trim();
+  const normalizedSlug = normalizeSlug(slug);
 
   return Category.findOneAndUpdate(
     { slug: normalizedSlug },
-    { $set: { name: name.trim(), slug: normalizedSlug, isActive: true } },
+    {
+      $set: {
+        name: String(name || "").trim(),
+        slug: normalizedSlug,
+        isActive: true,
+      },
+    },
     { new: true, upsert: true }
   );
 }
 
-async function upsertKbArticle({ title, slug, content, status, categoryId, authorId }) {
-  const normalizedSlug = slug.toLowerCase().trim();
+async function upsertKbArticle({
+  title,
+  slug,
+  content,
+  status,
+  categoryId,
+  authorId,
+}) {
+  const normalizedSlug = normalizeSlug(slug);
   const now = new Date();
 
   const update = {
-    title: title.trim(),
+    title: String(title || "").trim(),
     slug: normalizedSlug,
-    content,
+    content: String(content || ""),
     status,
     categoryId,
     authorId,
     publishedAt: status === "PUBLISHED" ? now : null,
+    isActive: true,
   };
 
   return KbArticle.findOneAndUpdate(
@@ -65,6 +98,7 @@ async function nextTicketCode() {
     { $inc: { seq: 1 } },
     { new: true, upsert: true }
   );
+
   return `TCK-${String(counter.seq).padStart(6, "0")}`;
 }
 
@@ -76,48 +110,64 @@ async function createTicketWithMessages({
   requesterId,
   assigneeId,
   messages,
+  seedTag,
 }) {
+  // Evita duplicados: si ya existe este ticket demo, no lo vuelve a crear
+  if (seedTag) {
+    const existing = await Ticket.findOne({ seedTag });
+    if (existing) {
+      console.log(`⏭ Ticket "${seedTag}" already exists -> ${existing.code}`);
+      return existing;
+    }
+  }
+
   const code = await nextTicketCode();
+  const now = new Date();
 
   const ticket = await Ticket.create({
     code,
-    subject,
-    description,
+    subject: String(subject || "").trim(),
+    description: String(description || "").trim(),
     priority,
     categoryId,
     requesterId,
     assigneeId: assigneeId || null,
     status: "OPEN",
-    lastMessageAt: new Date(),
+    lastMessageAt: now,
+    seedTag: seedTag || null,
   });
 
-  // Crear mensajes
-  let lastDate = new Date();
-  for (const m of messages) {
-    lastDate = new Date(); // cada mensaje: "ahora"
+  let lastDate = now;
+
+  for (const m of Array.isArray(messages) ? messages : []) {
+    lastDate = new Date();
     await TicketMessage.create({
       ticketId: ticket._id,
       authorId: m.authorId,
-      body: m.body,
+      body: String(m.body || "").trim(),
       isInternal: false,
+      createdAt: lastDate,
+      updatedAt: lastDate,
     });
   }
 
-  // Actualizar lastMessageAt con el "último mensaje"
-  await Ticket.findByIdAndUpdate(ticket._id, { $set: { lastMessageAt: lastDate } });
+  await Ticket.findByIdAndUpdate(ticket._id, {
+    $set: { lastMessageAt: lastDate },
+  });
 
+  console.log(`✅ Ticket created: ${ticket.code} (${seedTag || "without seedTag"})`);
   return ticket;
 }
 
 async function runSeed() {
   if (process.env.ALLOW_SEED !== "true") {
-    console.log("❌ ALLOW_SEED is not true. Aborting seed.");
+    console.log("❌ ALLOW_SEED is not set to 'true'. Aborting seed.");
     process.exit(1);
   }
 
   console.log("🌱 Seeding database...");
 
-  // 1) Users demo
+  // 1) Usuarios demo
   const admin = await upsertUser({
     name: "Demo Admin",
     email: "admin@demo.com",
@@ -125,9 +175,16 @@ async function runSeed() {
     role: "ADMIN",
   });
 
-  const agent = await upsertUser({
-    name: "Demo Agent",
+  const agentA = await upsertUser({
+    name: "Demo Agent A",
     email: "agent@demo.com",
+    password: "Agent123!",
+    role: "AGENT",
+  });
+
+  const agentB = await upsertUser({
+    name: "Demo Agent B",
+    email: "agent2@demo.com",
     password: "Agent123!",
     role: "AGENT",
   });
@@ -139,30 +196,42 @@ async function runSeed() {
     role: "CUSTOMER",
   });
 
-  console.log("✅ Users:", { admin: admin.email, agent: agent.email, customer: customer.email });
+  console.log("✅ Users:", {
+    admin: admin.email,
+    agentA: agentA.email,
+    agentB: agentB.email,
+    customer: customer.email,
+  });
 
-  // 2) Categories
-  const catTech = await upsertCategory({ name: "Soporte técnico", slug: "technical-support" });
-  const catBilling = await upsertCategory({ name: "Facturación", slug: "billing" });
+  // 2) Categorías
+  const catTech = await upsertCategory({
+    name: "Technical Support",
+    slug: "technical-support",
+  });
+
+  const catBilling = await upsertCategory({
+    name: "Billing",
+    slug: "billing",
+  });
 
   console.log("✅ Categories:", [catTech.slug, catBilling.slug]);
 
   // 3) KB Articles
   const kb1 = await upsertKbArticle({
-    title: "No puedo iniciar sesión",
-    slug: "no-puedo-iniciar-sesion",
+    title: "I can't log in",
+    slug: "i-cant-log-in",
     content:
-      "Si no puedes iniciar sesión:\n\n1) Revisa email/contraseña.\n2) Prueba a restablecer tu contraseña.\n3) Borra caché o prueba otro navegador.\n",
+      "If you can't log in:\n\n1) Double-check your email and password.\n2) Try resetting your password.\n3) Clear cache/cookies or try another browser.\n",
     status: "PUBLISHED",
     categoryId: catTech._id,
     authorId: admin._id,
   });
 
   const kb2 = await upsertKbArticle({
-    title: "No me aparece la factura",
-    slug: "no-me-aparece-la-factura",
+    title: "I can't find my invoice",
+    slug: "i-cant-find-my-invoice",
     content:
-      "Si no te aparece la factura:\n\n1) Comprueba el email de compra.\n2) Revisa spam.\n3) Si sigue igual, abre un ticket en Facturación.\n",
+      "If you can't find your invoice:\n\n1) Verify the email used for the purchase.\n2) Check your spam/junk folder.\n3) If it's still missing, open a Billing ticket.\n",
     status: "PUBLISHED",
     categoryId: catBilling._id,
     authorId: admin._id,
@@ -170,35 +239,43 @@ async function runSeed() {
 
   console.log("✅ KB:", [kb1.slug, kb2.slug]);
 
-  // 4) Tickets + messages
+  // 4) Tickets
   const t1 = await createTicketWithMessages({
-    subject: "No puedo iniciar sesión",
-    description: "Me sale error al entrar desde el móvil.",
+    subject: "I can't log in",
+    description: "I get an error when trying to log in on mobile.",
     priority: "HIGH",
     categoryId: catTech._id,
     requesterId: customer._id,
-    assigneeId: null, // sin asignar
+    assigneeId: null,
+    seedTag: "demo-ticket-1",
     messages: [
-      { authorId: customer._id, body: "Hola, no puedo iniciar sesión desde el móvil." },
-      { authorId: agent._id, body: "Gracias. ¿Qué error te aparece exactamente?" },
+      {
+        authorId: customer._id,
+        body: "Hi, I can't log in from my phone.",
+      },
+      {
+        authorId: agentA._id,
+        body: "Thanks. What exact error message are you seeing?",
+      },
     ],
   });
 
   const t2 = await createTicketWithMessages({
-    subject: "No me aparece la factura",
-    description: "Hice una compra y no encuentro la factura.",
+    subject: "I can't find my invoice",
+    description: "I made a purchase but I can't find the invoice.",
     priority: "NORMAL",
     categoryId: catBilling._id,
     requesterId: customer._id,
-    assigneeId: agent._id, // asignado
+    assigneeId: agentB._id,
+    seedTag: "demo-ticket-2",
     messages: [
-      { authorId: customer._id, body: "No encuentro la factura de mi compra." },
-      { authorId: agent._id, body: "¿Puedes confirmar el email con el que compraste?" },
-      { authorId: customer._id, body: "Sí, es customer@demo.com" },
+      { authorId: customer._id, body: "I can't find the invoice for my purchase." },
+      { authorId: agentB._id, body: "Can you confirm the email you used to purchase?" },
+      { authorId: customer._id, body: "Yes, it's customer@demo.com" },
     ],
   });
 
-  console.log("✅ Tickets created:", [t1.code, t2.code]);
+  console.log("✅ Tickets demo:", [t1.code, t2.code]);
 
   console.log("🌱 Seed completed!");
 }
